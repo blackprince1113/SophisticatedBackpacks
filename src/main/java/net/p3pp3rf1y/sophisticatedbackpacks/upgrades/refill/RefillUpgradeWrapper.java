@@ -39,6 +39,28 @@ import java.util.function.Supplier;
 public class RefillUpgradeWrapper extends UpgradeWrapperBase<RefillUpgradeWrapper, RefillUpgradeItem>
 		implements IFilteredUpgrade, ITickableUpgrade, IBlockPickResponseUpgrade {
 	private static final int COOLDOWN = 5;
+	private static CharmSlotHandler charmSlotHandler = CharmSlotHandler.EMPTY;
+
+	public static void setCharmSlotHandler(CharmSlotHandler handler) {
+		charmSlotHandler = handler;
+	}
+
+	public interface CharmSlotHandler {
+		CharmSlotHandler EMPTY = new CharmSlotHandler() {
+			@Override
+			public int getMissingCount(Player player, ItemStack filter) {
+				return 0;
+			}
+
+			@Override
+			public ItemStack refill(Player player, ItemStack stackToAdd) {
+				return stackToAdd;
+			}
+		};
+
+		int getMissingCount(Player player, ItemStack filter);
+		ItemStack refill(Player player, ItemStack stackToAdd);
+	}
 
 	private final Map<Integer, TargetSlot> targetSlots;
 
@@ -200,6 +222,9 @@ public class RefillUpgradeWrapper extends UpgradeWrapperBase<RefillUpgradeWrappe
 		OFF_HAND("off_hand", SBPTranslationHelper.INSTANCE.translUpgrade("refill.target_slot.off_hand"), SBPTranslationHelper.INSTANCE.translUpgrade("refill.target_slot.off_hand.tooltip").withStyle(ChatFormatting.DARK_GREEN),
 				(player, playerInvHandler, filter) -> getMissingCount(player.getOffhandItem(), filter),
 				(player, playerInvHandler, stackToAdd) -> refillSlot(player::getOffhandItem, stackToAdd, stack -> player.setItemInHand(InteractionHand.OFF_HAND, stack))),
+		CHARM("charm", SBPTranslationHelper.INSTANCE.translUpgrade("refill.target_slot.charm"), SBPTranslationHelper.INSTANCE.translUpgrade("refill.target_slot.charm.tooltip").withStyle(ChatFormatting.DARK_GREEN),
+				(player, playerInvHandler, filter) -> charmSlotHandler.getMissingCount(player, filter),
+				(player, playerInvHandler, stackToAdd) -> charmSlotHandler.refill(player, stackToAdd)),
 		TOOLBAR_1("toolbar_1", Component.literal("1"), SBPTranslationHelper.INSTANCE.translUpgrade(Constants.HOTBAR_TRANSL, 1).withStyle(ChatFormatting.DARK_GREEN),
 				(player, playerInvHandler, filter) -> getMissingCount(player.getInventory().getItem(0), filter),
 				(player, playerInvHandler, stackToAdd) -> refillSlot(() -> player.getInventory().getItem(0), stackToAdd, stack -> player.getInventory().setItem(0, stack))),
@@ -249,11 +274,15 @@ public class RefillUpgradeWrapper extends UpgradeWrapperBase<RefillUpgradeWrappe
 		}
 
 		public TargetSlot next() {
-			return VALUES[(ordinal() + 1) % VALUES.length];
+			return getAdjacentSlot(1);
 		}
 
 		public TargetSlot previous() {
-			return VALUES[Math.floorMod(ordinal() - 1, VALUES.length)];
+			return getAdjacentSlot(-1);
+		}
+
+		private TargetSlot getAdjacentSlot(int direction) {
+			return VALUES[Math.floorMod(ordinal() + direction, VALUES.length)];
 		}
 
 		private static final Map<String, TargetSlot> NAME_VALUES;
