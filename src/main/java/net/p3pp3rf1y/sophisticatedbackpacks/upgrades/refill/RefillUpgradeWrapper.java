@@ -38,7 +38,7 @@ import java.util.function.Supplier;
 
 public class RefillUpgradeWrapper extends UpgradeWrapperBase<RefillUpgradeWrapper, RefillUpgradeItem>
 		implements IFilteredUpgrade, ITickableUpgrade, IBlockPickResponseUpgrade {
-	private static final int COOLDOWN = 5;
+	private static final int COOLDOWN = 1;
 	private static CharmSlotHandler charmSlotHandler = CharmSlotHandler.EMPTY;
 
 	public static void setCharmSlotHandler(CharmSlotHandler handler) {
