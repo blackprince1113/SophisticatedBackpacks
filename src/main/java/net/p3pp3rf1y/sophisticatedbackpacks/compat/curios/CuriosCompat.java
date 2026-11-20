@@ -12,14 +12,15 @@ import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.common.capabilities.ICapabilityProvider;
 import net.minecraftforge.common.util.LazyOptional;
 import net.minecraftforge.event.AttachCapabilitiesEvent;
+import net.minecraftforge.event.entity.living.LivingDamageEvent;
 import net.minecraftforge.eventbus.api.IEventBus;
-import net.minecraftforge.items.ItemHandlerHelper;
 import net.minecraftforge.fml.DistExecutor;
 import net.minecraftforge.fml.InterModComms;
 import net.minecraftforge.fml.event.lifecycle.InterModEnqueueEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.registries.ForgeRegistries;
 import net.p3pp3rf1y.sophisticatedbackpacks.SophisticatedBackpacks;
+import net.p3pp3rf1y.sophisticatedbackpacks.api.CapabilityBackpackWrapper;
 import net.p3pp3rf1y.sophisticatedbackpacks.backpack.BackpackItem;
 import net.p3pp3rf1y.sophisticatedbackpacks.compat.CompatModIds;
 import net.p3pp3rf1y.sophisticatedbackpacks.init.ModItems;
@@ -46,18 +47,19 @@ public class CuriosCompat implements ICompat {
 	public static int getMissingCountInCharmSlot(Player player, ItemStack filter) {
 		return CuriosApi.getCuriosHelper().getCuriosHandler(player)
 				.map(handler -> handler.getStacksHandler(CHARM_SLOT).map(stacksHandler -> {
-					int missingCount = 0;
 					for (int slot = 0; slot < stacksHandler.getStacks().getSlots(); slot++) {
 						ItemStack charm = stacksHandler.getStacks().getStackInSlot(slot);
-						if (charm.isEmpty()) {
-							if (isValidCharm(player, slot, filter)) {
-								missingCount += filter.getMaxStackSize();
-							}
-						} else if (ItemHandlerHelper.canItemStacksStack(charm, filter)) {
-							missingCount += Math.max(0, charm.getMaxStackSize() - charm.getCount());
+						if (isSameItemIgnoringNbt(charm, filter)) {
+							return Math.max(0, charm.getMaxStackSize() - charm.getCount());
 						}
 					}
-					return Math.min(missingCount, filter.getMaxStackSize());
+
+				for (int slot = 0; slot < stacksHandler.getStacks().getSlots(); slot++) {
+					if (stacksHandler.getStacks().getStackInSlot(slot).isEmpty() && isValidCharm(player, slot, filter)) {
+						return filter.getMaxStackSize();
+					}
+				}
+				return 0;
 				}).orElse(0))
 				.orElse(0);
 	}
@@ -66,9 +68,27 @@ public class CuriosCompat implements ICompat {
 		return CuriosApi.getCuriosHelper().getCuriosHandler(player)
 				.map(handler -> handler.getStacksHandler(CHARM_SLOT).map(stacksHandler -> {
 					ItemStack remaining = stackToAdd;
+					for (int slot = 0; slot < stacksHandler.getStacks().getSlots(); slot++) {
+						ItemStack currentCharm = stacksHandler.getStacks().getStackInSlot(slot);
+						if (!isSameItemIgnoringNbt(currentCharm, remaining)) {
+							continue;
+						}
+
+						int slotCapacity = currentCharm.getMaxStackSize() - currentCharm.getCount();
+						int countToMove = Math.min(slotCapacity, remaining.getCount());
+						if (countToMove > 0) {
+							ItemStack charmToEquip = currentCharm.copy();
+							charmToEquip.grow(countToMove);
+							CuriosApi.getCuriosHelper().setEquippedCurio(player, CHARM_SLOT, slot, charmToEquip);
+							remaining = remaining.copy();
+							remaining.shrink(countToMove);
+						}
+						return remaining;
+					}
+
 					for (int slot = 0; slot < stacksHandler.getStacks().getSlots() && !remaining.isEmpty(); slot++) {
 						ItemStack currentCharm = stacksHandler.getStacks().getStackInSlot(slot);
-						if (!currentCharm.isEmpty() && !ItemHandlerHelper.canItemStacksStack(currentCharm, remaining)) {
+						if (!currentCharm.isEmpty()) {
 							continue;
 						}
 						if (currentCharm.isEmpty() && !isValidCharm(player, slot, remaining)) {
@@ -94,6 +114,10 @@ public class CuriosCompat implements ICompat {
 					return remaining;
 				}).orElse(stackToAdd))
 				.orElse(stackToAdd);
+	}
+
+	private static boolean isSameItemIgnoringNbt(ItemStack stack, ItemStack other) {
+		return !stack.isEmpty() && !other.isEmpty() && stack.getItem() == other.getItem();
 	}
 
 	private static boolean isValidCharm(Player player, int slot, ItemStack stack) {
@@ -133,6 +157,18 @@ public class CuriosCompat implements ICompat {
 
 	private void sendImc(InterModEnqueueEvent evt) {
 		InterModComms.sendTo(CompatModIds.CURIOS, SlotTypeMessage.REGISTER_TYPE, () -> SlotTypePreset.BACK.getMessageBuilder().build());
+	}
+
+	private void refillCharmAfterDamage(LivingDamageEvent event) {
+		if (!(event.getEntity() instanceof Player player) || player.level.isClientSide || player.isDeadOrDying()) {
+			return;
+		}
+		PlayerInventoryProvider.get().runOnBackpacks(player, (backpack, inventoryName, identifier, slot) -> {
+			backpack.getCapability(CapabilityBackpackWrapper.getCapabilityInstance()).ifPresent(wrapper ->
+					wrapper.getUpgradeHandler().getWrappersThatImplement(RefillUpgradeWrapper.class)
+							.forEach(refillUpgrade -> refillUpgrade.refillCharmSlotsNow(player)));
+			return false;
+		});
 	}
 
 	public void onAttachCapabilities(AttachCapabilitiesEvent<ItemStack> evt) {
@@ -175,6 +211,7 @@ public class CuriosCompat implements ICompat {
 
 		IEventBus eventBus = MinecraftForge.EVENT_BUS;
 		eventBus.addGenericListener(ItemStack.class, this::onAttachCapabilities);
+		eventBus.addListener(this::refillCharmAfterDamage);
 
 		addPlayerInventoryHandlers();
 	}

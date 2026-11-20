@@ -38,7 +38,8 @@ import java.util.function.Supplier;
 
 public class RefillUpgradeWrapper extends UpgradeWrapperBase<RefillUpgradeWrapper, RefillUpgradeItem>
 		implements IFilteredUpgrade, ITickableUpgrade, IBlockPickResponseUpgrade {
-	private static final int COOLDOWN = 1;
+	private static final int COOLDOWN = 5;
+	private static final int CHARM_COOLDOWN = 1;
 	private static CharmSlotHandler charmSlotHandler = CharmSlotHandler.EMPTY;
 
 	public static void setCharmSlotHandler(CharmSlotHandler handler) {
@@ -118,7 +119,19 @@ public class RefillUpgradeWrapper extends UpgradeWrapperBase<RefillUpgradeWrappe
 			}
 			tryRefillFilter(entity, playerInvHandler, filter, getTargetSlots().getOrDefault(slot, TargetSlot.ANY));
 		}));
-		setCooldown(world, COOLDOWN);
+		setCooldown(world, targetSlots.containsValue(TargetSlot.CHARM) ? CHARM_COOLDOWN : COOLDOWN);
+	}
+
+	public void refillCharmSlotsNow(Player player) {
+		if (player.level.isClientSide || player.isDeadOrDying() || !targetSlots.containsValue(TargetSlot.CHARM)) {
+			return;
+		}
+		player.getCapability(ForgeCapabilities.ITEM_HANDLER, null).ifPresent(playerInvHandler ->
+				InventoryHelper.iterate(filterLogic.getFilterHandler(), (slot, filter) -> {
+					if (!filter.isEmpty() && targetSlots.getOrDefault(slot, TargetSlot.ANY) == TargetSlot.CHARM) {
+						tryRefillFilter(player, playerInvHandler, filter, TargetSlot.CHARM);
+					}
+				}));
 	}
 
 	private void tryRefillFilter(@Nonnull LivingEntity entity, IItemHandler playerInvHandler, ItemStack filter, TargetSlot targetSlot) {
@@ -126,7 +139,11 @@ public class RefillUpgradeWrapper extends UpgradeWrapperBase<RefillUpgradeWrappe
 			return;
 		}
 		int missingCount = targetSlot.missingCountGetter.getMissingCount(player, playerInvHandler, filter);
-		if (ItemHandlerHelper.canItemStacksStack(player.containerMenu.getCarried(), filter)) {
+		ItemStack carriedStack = player.containerMenu.getCarried();
+		boolean carriedMatchesFilter = targetSlot == TargetSlot.CHARM
+				? isSameItemIgnoringNbt(carriedStack, filter)
+				: ItemHandlerHelper.canItemStacksStack(carriedStack, filter);
+		if (carriedMatchesFilter) {
 			missingCount -= Math.min(missingCount, player.containerMenu.getCarried().getCount());
 		}
 		if (missingCount == 0) {
@@ -135,7 +152,9 @@ public class RefillUpgradeWrapper extends UpgradeWrapperBase<RefillUpgradeWrappe
 		IItemHandler extractFromHandler = storageWrapper.getInventoryForUpgradeProcessing();
 		ItemStack toMove = filter.copy();
 		toMove.setCount(missingCount);
-		ItemStack extracted = InventoryHelper.extractFromInventory(toMove, extractFromHandler, true);
+		ItemStack extracted = targetSlot == TargetSlot.CHARM
+				? extractFirstItemMatch(toMove, extractFromHandler, true)
+				: InventoryHelper.extractFromInventory(toMove, extractFromHandler, true);
 		if (extracted.isEmpty()) {
 			return;
 		}
@@ -143,8 +162,26 @@ public class RefillUpgradeWrapper extends UpgradeWrapperBase<RefillUpgradeWrappe
 		if (remaining.getCount() != extracted.getCount()) {
 			ItemStack toExtract = extracted.copy();
 			toExtract.setCount(extracted.getCount() - remaining.getCount());
-			InventoryHelper.extractFromInventory(toExtract, extractFromHandler, false);
+			if (targetSlot == TargetSlot.CHARM) {
+				extractFirstItemMatch(toExtract, extractFromHandler, false);
+			} else {
+				InventoryHelper.extractFromInventory(toExtract, extractFromHandler, false);
+			}
 		}
+	}
+
+	private static ItemStack extractFirstItemMatch(ItemStack toExtract, IItemHandler inventory, boolean simulate) {
+		for (int slot = 0; slot < inventory.getSlots(); slot++) {
+			ItemStack stack = inventory.getStackInSlot(slot);
+			if (!stack.isEmpty() && isSameItemIgnoringNbt(stack, toExtract)) {
+				return inventory.extractItem(slot, toExtract.getCount(), simulate);
+			}
+		}
+		return ItemStack.EMPTY;
+	}
+
+	private static boolean isSameItemIgnoringNbt(ItemStack stack, ItemStack other) {
+		return !stack.isEmpty() && !other.isEmpty() && stack.getItem() == other.getItem();
 	}
 
 	public boolean allowsTargetSlotSelection() {
